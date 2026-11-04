@@ -1,8 +1,8 @@
 .pio/
-build/
 .vscode/
 __pycache__/
 *.pyc
 .venv/
 .pytest_cache/
 log/
+include/wifi_config.h

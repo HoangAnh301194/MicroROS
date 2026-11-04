@@ -1,5 +1,0 @@
-idf_component_register(
-    SRCS "main.c"
-    INCLUDE_DIRS "."
-    REQUIRES micro_ros_espidf_component esp_timer esp_hw_support esp_log
-)
