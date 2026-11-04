@@ -1,82 +1,76 @@
-# ESP32-WROOM micro-ROS: IMU 20 Hz + cmd_vel 10 Hz
+# ESP32-WROOM + micro-ROS: IMU 20 Hz và cmd_vel 10 Hz
 
-Demo hai chieu cho ESP32-WROOM (ESP32-DevKit) va PC chay ROS 2 Humble.
+Dự án kiểm thử truyền thông hai chiều giữa **ESP32-WROOM** (ESP-IDF/PlatformIO) và **Ubuntu chạy ROS 2 Humble**.
 
-- ESP32 publish **/imu/data** (sensor_msgs/msg/Imu) moi 50 ms = **20 Hz**.
-- PC subscribe /imu/data va publish **/cmd_vel** (geometry_msgs/msg/Twist) moi 100 ms = **10 Hz**.
-- ESP32 subscribe /cmd_vel, ghi gia tri nhan qua UART; **khong dieu khien dong co**.
-- IMU la du lieu **gia lap**: quaternion quay quanh Z, van toc goc, gia toc trong truong 9.81 m/s² va nhieu ngau nhien nho. Khong duoc dung de dinh vi/kiem soat robot that.
+| Thiết bị | Vai trò | Topic | Kiểu bản tin | Tần số |
+|---|---|---|---|---|
+| ESP32 → PC | Publisher IMU giả lập | /imu/data | sensor_msgs/msg/Imu | 20 Hz |
+| PC → ESP32 | Publisher vận tốc thử nghiệm | /cmd_vel | geometry_msgs/msg/Twist | 10 Hz |
 
-## So do
+ESP32 nhận lệnh và ghi ra UART, **không điều khiển động cơ**. Giá trị IMU chỉ dùng để kiểm tra micro-ROS, không phải dữ liệu từ cảm biến thật.
 
-    ESP32-WROOM                         Ubuntu PC (ROS 2 Humble)
-       |                                        |
-       | /imu/data: Imu, 20 Hz                  |
-       +---- micro-ROS -> Wi-Fi UDP -> Agent -->+---- rclpy subscribe
-       |                                        |
-       | /cmd_vel: Twist, 10 Hz                 |
-       +<--- micro-ROS <- Wi-Fi UDP <- Agent <--+---- rclpy publish
+## 1. Kiến trúc
 
-Micro XRCE-DDS chay tren ESP32; micro-ROS Agent lam cau noi sang ROS 2.
+    ESP32-WROOM                          Ubuntu PC / ROS 2 Humble
+      Publisher /imu/data                    Subscriber /imu/data
+                |                                     ^
+                +---- Wi-Fi UDP -> micro-ROS Agent ---+
+                |                                     |
+      Subscriber /cmd_vel                    Publisher /cmd_vel
+                ^                                     |
+                +---- Wi-Fi UDP <- micro-ROS Agent ---+
 
-## 1. Chuẩn bị project và submodule
+- `/imu/data`: bản tin IMU chuẩn, có `header.frame_id = imu_link`, quaternion mô phỏng góc quay quanh trục Z, vận tốc góc và gia tốc trọng trường kèm nhiễu nhỏ.
+- `/cmd_vel`: `geometry_msgs/msg/Twist`. Phía PC gửi mỗi 100 ms; mặc định mọi vận tốc đều bằng 0 để kiểm tra đường truyền an toàn.
+- QoS: IMU **BEST_EFFORT** ở cả hai đầu; lệnh `cmd_vel` dùng **RELIABLE**.
+- ESP32 đồng bộ dấu thời gian với Agent; nếu không đồng bộ được, `header.stamp` bằng 0.
 
-Yeu cau: PlatformIO, ESP32-WROOM/ESP32-DevKit, Git, Wi-Fi 2.4 GHz,
-Ubuntu PC da cai ROS 2 Humble, Docker de chay micro-ROS Agent.
+## 2. Chuẩn bị
+
+Cần PlatformIO Core hoặc VS Code + PlatformIO, Git, ESP32-WROOM/ESP32-DevKit, Wi-Fi **2.4 GHz**, Ubuntu/ROS 2 Humble và Docker (để chạy Agent).
 
 ```bash
 git clone --recurse-submodules https://github.com/HoangAnh301194/MicroROS.git
 cd MicroROS
-# Neu clone truoc do:
+
+# Khi thử nhánh tính năng trước lúc merge:
+git switch feature/esp32-imu20-cmdvel10
 git submodule update --init --recursive
 ```
 
-Component da duoc pin tai commit 4ddd8c26e721662319ed8af981cb7cdc9ae05382
-(nhanh Humble). Khong can tu dong update component.
+Dự án đã tham chiếu submodule `micro_ros_espidf_component` tại commit `4ddd8c26e721662319ed8af981cb7cdc9ae05382` (nhánh Humble). File `.gitmodules` được bổ sung để clone submodule chính xác.
 
-Repo su dung PlatformIO espressif32 8.0.0 / ESP-IDF 6.1.
-**Can kiem tra build tren may that:** component tai commit nay ghi nhan
-kiem thu toi ESP-IDF 6.0, chua xac nhan tuong thich 6.1.
-Neu gap loi do phien ban, co the thu pin platform = espressif32@7.0.1
-(ESP-IDF 6.0.1) va tai tao sdkconfig/buid sach, nhung chi sau khi luu
-ban sao cau hinh cu. Tuyet doi khong doi ROS distro tren ESP32 sang rolling
-khi PC dang chay Humble.
+**Lưu ý tương thích:** `platformio.ini` hiện dùng `espressif32@8.0.0` (ESP-IDF 6.1), trong khi component đang dùng chỉ công bố kiểm thử đến ESP-IDF 6.0. Chưa thể xác nhận build thành công trên 6.1 nếu không kiểm tra thực tế. Nếu gặp lỗi phiên bản, thử `espressif32@7.0.1` (ESP-IDF 6.0.1) và tái tạo cấu hình trong một bản sao dự án. Giữ micro-ROS **Humble**, không tự đổi sang Rolling.
 
-## 2. Cau hinh Wi-Fi va dia chi Agent
+## 3. Cấu hình Wi-Fi và micro-ROS Agent
 
-ESP32 va PC phai cung mang co the truy cap UDP. Tim IPv4 LAN cua PC:
+ESP32 và PC phải cùng mạng nội bộ (hoặc có định tuyến UDP qua lại). Xác định địa chỉ IPv4 của PC:
 
 ```bash
 hostname -I
 ```
 
-Chon IP Wi-Fi/Ethernet phu hop (vi du 192.168.1.10; khong chon 127.0.0.1).
-Chay:
+Chọn địa chỉ mạng LAN thích hợp, ví dụ `192.168.1.10` (không dùng `127.0.0.1`). Tại thư mục dự án, chạy:
 
 ```bash
 pio run -t menuconfig
 ```
 
-Trong **micro-ROS Settings**:
-- micro-ROS middleware: **Micro XRCE-DDS**.
-- micro-ROS network interface: **WLAN interface**.
-- WiFi Configuration: nhap **Wi-Fi SSID** va **Wi-Fi Password**.
-- micro-ROS Agent IP: IP LAN cua PC (vi du 192.168.1.10).
-- micro-ROS Agent Port: **8888**.
-- Trong **micro-ROS demo task settings**, giu stack 16000 bytes, priority 5.
+Trong mục **micro-ROS Settings**, thiết lập:
 
-Luu va thoat. ESP32-WROOM chi ho tro Wi-Fi 2.4 GHz.
+1. Middleware: **Micro XRCE-DDS**.
+2. Network interface: **WLAN interface**.
+3. WiFi Configuration: SSID và mật khẩu Wi-Fi 2.4 GHz.
+4. Micro-ROS Agent IP: địa chỉ IPv4 của PC; port: **8888**.
+5. Mục **micro-ROS demo task settings**: stack **16000 bytes**, priority **5**.
 
-**Bao mat:** sdkconfig.esp32dev dang la file da duoc Git theo doi.
-KHONG commit/push file nay sau khi nhap mat khau Wi-Fi.
-Kiem tra git diff truoc khi git add/commit, va chi stage nhung file can thiet.
-.gitignore khong the an file da duoc track.
+Lưu cấu hình. Nếu thay đổi IP của PC, cần cập nhật Agent IP rồi nạp lại ESP32.
 
-## 3. Build va flash ESP32
+**Bảo mật:** `sdkconfig.esp32dev` đang là file được Git theo dõi. Sau khi nhập mật khẩu Wi-Fi, không đưa thay đổi của file này lên GitHub. Kiểm tra `git diff` và `git status` trước khi commit. `.gitignore` không thể bỏ theo dõi một file đã track.
 
-micro-ROS component can catkin_pkg, colcon, lark va voi nhanh Humble nay
-can empy<4. Cai trong **Python environment ma ESP-IDF/PlatformIO build
-thuc su su dung** (khong nhat thiet la Python he thong):
+## 4. Biên dịch và nạp ESP32
+
+Component micro-ROS cần các công cụ Python `catkin_pkg`, `colcon`, `lark` và `empy<4` (với phiên bản Humble đang ghim). Phải cài vào **đúng môi trường Python mà ESP-IDF/PlatformIO sử dụng**.
 
 ```bash
 python3 -m pip install catkin_pkg colcon-common-extensions lark 'empy<4'
@@ -85,24 +79,20 @@ pio run -t upload --upload-port /dev/ttyUSB0
 pio device monitor -p /dev/ttyUSB0 -b 115200
 ```
 
-Thay /dev/ttyUSB0 bang cong thuc te (/dev/ttyACM0 neu phu hop).
-Cac package Python phai ton tai trong dung IDF virtual environment.
+Thay `/dev/ttyUSB0` bằng cổng USB-UART thực tế. Nếu thiếu thư viện Python khi build, hãy xác định Python interpreter do PlatformIO/ESP-IDF gọi và cài gói vào môi trường đó thay vì chỉ cài vào Python hệ thống.
 
-**Quan trong:** bat Agent (muc 4) truoc khi reset/boot ESP32,
-vi demo co the dung khi tao ROS entities neu Agent chua san sang.
+**Thứ tự khởi động:** chạy micro-ROS Agent trước, sau đó khởi động hoặc reset ESP32. Phiên bản thử nghiệm này chưa có cơ chế tự tạo lại node khi Agent mất kết nối.
 
-## 4. Agent (Terminal 1, tren PC)
+## 5. Chạy micro-ROS Agent trên PC — Terminal 1
 
 ```bash
 docker run --rm -it --net=host microros/micro-ros-agent:humble \
   udp4 --port 8888 -v6
 ```
 
-Docker --net=host dung tren Ubuntu/Linux. Neu firewal dang bat, cho phep
-UDP port 8888. Su dung Agent **humble** cho ROS 2 Humble.
-Sau do reset ESP32 de no ket noi voi Agent.
+Lệnh Docker dùng chế độ host network của Linux. Nếu có firewall, cho phép UDP port 8888. Đảm bảo PC và ESP32 truy cập được nhau qua mạng.
 
-## 5. ROS 2 bridge (Terminal 2, tren PC)
+## 6. Chạy node ROS 2 trên PC — Terminal 2
 
 ```bash
 source /opt/ros/humble/setup.bash
@@ -110,27 +100,20 @@ cd MicroROS
 python3 host/imu_cmd_vel_bridge.py
 ```
 
-Mac dinh host publish **Twist bang 0** o 10 Hz de test duong truyen.
-Co the thu gia tri khac (chi de debug; firmware khong lai motor):
+Node sẽ **subscribe IMU** và **publish cmd_vel đúng chu kỳ cấu hình 100 ms**. Mặc định lệnh phát ra bằng 0. Để thử truyền số khác 0 (firmware chỉ ghi log, không điều khiển động cơ):
 
 ```bash
 python3 host/imu_cmd_vel_bridge.py --ros-args \
   -p linear_x:=0.20 -p angular_z:=0.10
 ```
 
-Khi khong nhan IMU qua 0.5 s, bridge van publish o 10 Hz nhung tu
-dong dua linear.x/angular.z ve **0**. Tham so timeout: imu_timeout_s.
+Nếu trong **0,5 giây** không nhận được IMU mới, node vẫn phát `cmd_vel` ở 10 Hz nhưng bắt buộc vận tốc về 0. Có thể điều chỉnh ngưỡng bằng tham số ROS `imu_timeout_s`.
 
-QoS:
-- /imu/data: ESP32 BEST_EFFORT, PC subscription sensor_data BEST_EFFORT.
-- /cmd_vel: PC RELIABLE, ESP32 subscription RELIABLE.
-
-## 6. Xac minh
-
-Mo Terminal 3:
+## 7. Kiểm thử — Terminal 3
 
 ```bash
 source /opt/ros/humble/setup.bash
+
 ros2 node list
 ros2 topic list -t
 ros2 topic echo /imu/data --qos-reliability best_effort
@@ -141,20 +124,21 @@ ros2 topic info /imu/data --verbose
 ros2 topic info /cmd_vel --verbose
 ```
 
-Ket qua ky vong tren ket noi on dinh:
-- /imu/data khoang **20 Hz**, chu ky **50 ms**.
-- /cmd_vel khoang **10 Hz**, chu ky **100 ms**.
-- UART ESP32 log "cmd_vel #N" va thong ke so ban tin nhan.
-- Host log ti le IMU rx va cmd_vel tx moi giay.
-Sai lech nho do scheduling/Wi-Fi la binh thuong; do thuc te bang ros2 topic hz.
+Kết quả kỳ vọng trên kết nối ổn định:
 
-## Gioi han va xu ly loi
+- `/imu/data`: khoảng **20 Hz**, chu kỳ **50 ms**.
+- `/cmd_vel`: khoảng **10 Hz**, chu kỳ **100 ms**.
+- PC in thống kê **IMU RX** và **cmd_vel TX** mỗi giây.
+- UART ESP32 hiện `cmd_vel #N` với `linear.x`, `angular.z` nhận được và thống kê số lượng mỗi giây.
 
-- IMU gia, khong phai do thuc. Covariance chi la gia tri gia dinh de test.
-- Header stamp chi co epoch ROS hop le neu sync voi Agent thanh cong; neu khong bang 0.
-- Demo toi gian chua co tu khoi tao lai ROS entities khi Agent/Wi-Fi ngat.
-  Khi Agent khoi dong lai, reset ESP32. Chung ta co the bo sung state machine reconnect sau.
-- PlatformIO/ESP-IDF 6.1 va component pin hien tai chua duoc test build/hardware o day.
-- Neu topic hien ra nhung echo IMU khong co data, xem lai **QoS BEST_EFFORT**.
-- Neu ESP32 ket noi Wi-Fi nhung khong thay node, kiem tra Agent IP (khong dung
-  localhost), UDP 8888, tuong lua, ROS_DOMAIN_ID, va Agent dang chay.
+Tần số đo thực tế có thể lệch một chút do FreeRTOS, Wi-Fi và cơ chế lập lịch của ROS 2. Các con số 20/10 Hz hiện là **tần số thiết kế**, chưa phải kết quả thử nghiệm trên phần cứng.
+
+## 8. Xử lý sự cố và giới hạn
+
+- **Không thấy topic:** kiểm tra SSID, Agent IP, cổng UDP 8888, firewall và micro-ROS Agent.
+- **Topic IMU hiện nhưng không nhận dữ liệu:** kiểm tra QoS. Publisher là BEST_EFFORT nên subscriber không được yêu cầu RELIABLE.
+- **PC dùng ROS_DOMAIN_ID khác 0:** cần bảo đảm các node ROS 2 và Agent được chạy trong cùng miền ROS 2 thích hợp; đồng thời kiểm tra biến môi trường ở terminal/container.
+- **Agent restart:** reset ESP32, do bản này chưa có state machine khôi phục kết nối.
+- **Timestamp bằng 0:** kiểm tra đồng bộ epoch với Agent.
+- **Build lỗi:** phiên bản ESP-IDF 6.1 chưa được component hiện tại xác nhận chính thức; kiểm tra log build trước khi thay đổi công cụ.
+- **IMU là dữ liệu mô phỏng:** covariance cũng là giá trị giả định, không được dùng làm phép đo để điều khiển robot thực.
