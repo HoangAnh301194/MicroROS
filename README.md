@@ -30,12 +30,15 @@ ESP32 nhận lệnh và ghi ra UART, **không điều khiển động cơ**. Gi�
 Cần PlatformIO Core hoặc VS Code + PlatformIO, Git, ESP32-WROOM/ESP32-DevKit, Wi-Fi **2.4 GHz**, Ubuntu/ROS 2 Humble và Docker (để chạy Agent).
 
 ```bash
-git clone --recurse-submodules https://github.com/HoangAnh301194/MicroROS.git
+git clone https://github.com/HoangAnh301194/MicroROS.git
 cd MicroROS
 
-# Khi thử nhánh tính năng trước lúc merge:
+# Cho đến khi nhánh tính năng được merge vào main:
 git switch feature/esp32-imu20-cmdvel10
 git submodule update --init --recursive
+
+# Sau khi được merge vào main, có thể dùng:
+# git clone --recurse-submodules https://github.com/HoangAnh301194/MicroROS.git
 ```
 
 Dự án đã tham chiếu submodule `micro_ros_espidf_component` tại commit `4ddd8c26e721662319ed8af981cb7cdc9ae05382` (nhánh Humble). File `.gitmodules` được bổ sung để clone submodule chính xác.
@@ -140,5 +143,5 @@ Tần số đo thực tế có thể lệch một chút do FreeRTOS, Wi-Fi và c
 - **PC dùng ROS_DOMAIN_ID khác 0:** cần bảo đảm các node ROS 2 và Agent được chạy trong cùng miền ROS 2 thích hợp; đồng thời kiểm tra biến môi trường ở terminal/container.
 - **Agent restart:** reset ESP32, do bản này chưa có state machine khôi phục kết nối.
 - **Timestamp bằng 0:** kiểm tra đồng bộ epoch với Agent.
-- **Build lỗi:** phiên bản ESP-IDF 6.1 chưa được component hiện tại xác nhận chính thức; kiểm tra log build trước khi thay đổi công cụ.
+- **Build lỗi:** phiên bản ESP-IDF 6.1 chưa được component hiện tại xác nhận chính thức; kiểm tra log build trước khi thay đổi công cụ. Nếu firmware vượt kích thước phân vùng ứng dụng, cần cấu hình phân vùng lớn hơn phù hợp với dung lượng flash thực tế.
 - **IMU là dữ liệu mô phỏng:** covariance cũng là giá trị giả định, không được dùng làm phép đo để điều khiển robot thực.
