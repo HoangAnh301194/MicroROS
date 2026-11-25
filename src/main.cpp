@@ -16,6 +16,7 @@
 // ESP32 subscriber: /cmd_vel (PC publishes at 10 Hz).
 // All IMU measurements are simulated; no physical motor output.
 static constexpr uint32_t IMU_PERIOD_MS = 50;
+static constexpr size_t ROS_DOMAIN_ID_VALUE = 94;
 static rcl_allocator_t allocator;
 static rclc_support_t support;
 static rcl_node_t node;
@@ -86,7 +87,16 @@ static bool create_ros() {
   imu_timer = rcl_get_zero_initialized_timer();
   executor = rclc_executor_get_zero_initialized_executor();
 
-  if (!ok(rclc_support_init(&support, 0, nullptr, &allocator), "support")) return false;
+  rcl_init_options_t init_options = rcl_get_zero_initialized_init_options();
+  if (!ok(rcl_init_options_init(&init_options, allocator), "init_options")) return false;
+  if (!ok(rcl_init_options_set_domain_id(&init_options, ROS_DOMAIN_ID_VALUE), "domain_id")) {
+    rcl_init_options_fini(&init_options);
+    return false;
+  }
+  const bool support_ok = ok(
+      rclc_support_init_with_options(&support, 0, nullptr, &init_options, &allocator), "support");
+  rcl_init_options_fini(&init_options);
+  if (!support_ok) return false;
   if (!ok(rclc_node_init_default(&node, "esp32_imu_demo", "", &support), "node")) return false;
   if (!ok(rclc_publisher_init_best_effort(
           &imu_pub, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, Imu),

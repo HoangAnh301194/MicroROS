@@ -6,3 +6,4 @@ __pycache__/
 .pytest_cache/
 log/
 include/wifi_config.h
+agent_ws/
