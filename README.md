@@ -1,110 +1,104 @@
-# ESP32-WROOM micro-ROS — Arduino + PlatformIO
+# ESP32-WROOM micro-ROS — So sánh Odometry Gazebo vs ESP32 (MVP)
 
-Đây là nhánh **feature/arduino-microros**, độc lập với firmware ESP-IDF.
+Nhánh **`feature/arduino-microros-v2`** triển khai MVP đối chiếu odometry 2D do **ESP32-WROOM** tính theo thời gian thực với odometry tham chiếu từ **Gazebo (TurtleBot3 Burger)** trên **ROS 2 Humble** qua **micro-ROS Wi-Fi UDP**.
 
-- ESP32-WROOM publish IMU giả lập `/imu/data` (`sensor_msgs/msg/Imu`) **20 Hz** (50 ms).
-- PC ROS 2 Humble subscribe IMU và publish `/cmd_vel` (`geometry_msgs/msg/Twist`) **10 Hz** (100 ms).
-- ESP32 subscribe `/cmd_vel`, in `linear.x` và `angular.z` ra Serial. **Không điều khiển motor.**
-- Giao thức: **Wi-Fi UDP / micro-ROS Agent Humble**. IMU giả có nhiễu ngẫu nhiên, quaternion quay quanh Z và trọng lực 9.81 m/s².
+## 1. Hợp đồng ROS 2
 
-## 1. Clone trên phân vùng Linux ext4 (khuyến nghị)
+| Topic | Kiểu bản tin | QoS | Vai trò |
+|---|---|---|---|
+| `/cmd_vel` | `geometry_msgs/msg/Twist` | RELIABLE | `host/odom_experiment.py` phát ở **10 Hz** theo sim time; Gazebo và ESP32 cùng subscribe (`linear.x`, `angular.z`). |
+| `/odom` | `nav_msgs/msg/Odometry` | RELIABLE | Gazebo diff-drive phát (`odom` → `base_footprint`), làm tham chiếu. |
+| `/esp32/odom_init` | `geometry_msgs/msg/PoseStamped` | RELIABLE | Khi robot đứng yên, `odom_experiment.py` gửi `header` + `pose` từ `/odom` sang ESP32 để đặt trạng thái ban đầu. |
+| `/clock` | `rosgraph_msgs/msg/Clock` | BEST_EFFORT (`ClockQoS`) | Gazebo phát (giới hạn 25 Hz trong `sim/config/gazebo_params.yaml`). ESP32 tính `dt` theo sim time; giữ pose khi pause và chờ `/esp32/odom_init` mới nếu đồng hồ nhảy lùi. |
+| `/esp32/odom` | `nav_msgs/msg/Odometry` | RELIABLE | ESP32 xác nhận init và xuất pose (`frame_id=odom`, `child_frame_id=base_footprint`) + twist đã dùng để tích phân midpoint 2D. |
 
-Trước đó bản ESP-IDF nằm trên NTFS `/media/...`; để tránh lỗi build micro-ROS, dùng thư mục home ext4:
+*(Lưu ý: `host/imu_cmd_vel_bridge.py` là script riêng cho bài demo IMU trước đó, không chạy đồng thời trong lúc đo odometry.)*
 
-```bash
-cd ~
-git clone -b feature/arduino-microros https://github.com/HoangAnh301194/MicroROS.git MicroROS-Arduino
-cd ~/MicroROS-Arduino
-```
+## 2. Cấu hình Wi-Fi local & Build/Flash ESP32
 
-Nếu tiếp tục trong repo cũ, lưu các thay đổi cục bộ (ví dụ sdkconfig đã chỉnh) trước khi chuyển nhánh:
+Firmware dùng `ROS_DOMAIN_ID = 94` (trong `src/main.cpp`), cấu hình flash **2 MB** factory-only (`partitions_2mb.csv`, tối đa `2031616` bytes) và `micro_ros_platformio` (`espressif32@6.12.0`).
 
-```bash
-git fetch origin
-git switch --track origin/feature/arduino-microros
-```
-
-Không chạy `pio run -t menuconfig`: đây là project Arduino, không phải ESP-IDF.
-
-## 2. Tạo cấu hình Wi-Fi local
+Tạo file `include/wifi_config.h` (đã nằm trong `.gitignore`, không commit lên GitHub):
 
 ```bash
 cp include/wifi_config.example.h include/wifi_config.h
-nano include/wifi_config.h
 ```
 
-Sửa 4 mục: SSID Wi-Fi **2.4 GHz**, mật khẩu, IPv4 của PC chạy Agent (xem bằng `hostname -I`), và cổng UDP 8888. Ví dụ:
+Điền SSID Wi-Fi **2.4 GHz**, mật khẩu, IPv4 của PC chạy Agent (`hostname -I`) và cổng `8888`.
 
-```c
-#define MICROROS_WIFI_SSID "YourSSID"
-#define MICROROS_WIFI_PASSWORD "YourPassword"
-#define MICROROS_AGENT_IP "192.168.1.100"
-#define MICROROS_AGENT_PORT 8888
-```
-
-File `include/wifi_config.h` được Git bỏ qua; không đưa mật khẩu lên GitHub.
-
-## 3. Build / upload (ESP32)
-
-Dùng PlatformIO Core mới đã cài, tránh `/usr/bin/pio` cũ phiên bản 4.3.4:
+Build và nạp qua PlatformIO Core trong `~/.platformio/penv/bin/pio`:
 
 ```bash
-cd ~/MicroROS-Arduino
 ~/.platformio/penv/bin/pio run
 ~/.platformio/penv/bin/pio run -t upload --upload-port /dev/ttyUSB0
 ~/.platformio/penv/bin/pio device monitor -p /dev/ttyUSB0 -b 115200
 ```
 
-Thay /dev/ttyUSB0 bằng cổng của ESP32. Lần build đầu micro_ros_platformio vẫn sử dụng công cụ Python/CMake/colcon bên trong thư viện. Nếu thiếu công cụ hệ thống:
+## 3. Chạy thực tế trên PC
+
+Đảm bảo các terminal dùng chung `ROS_DOMAIN_ID=94` (mặc định trong shell hiện tại) và source ROS 2 Humble.
+
+### Terminal 1 — Mở micro-ROS Agent (local `agent_ws`)
 
 ```bash
-sudo apt update
-sudo apt install -y git cmake python3-pip python3-venv
-```
-
-Firmware đã ghim **espressif32@6.12.0**, thư viện [micro_ros_platformio](https://github.com/micro-ROS/micro_ros_platformio) tại commit cfee17fa..., ROS 2 **Humble**, transport **wifi**.
-
-**Flash:** log ESP-IDF trước báo thấy chip **2 MB** thay vì 4 MB. Bản này đặt flash 2 MB và bảng phân vùng **factory-only (không OTA)**, có app tối đa 0x1F0000 byte = 1,984 KiB. Nếu xác minh chip thực tế 4 MB, cần điều chỉnh lại cấu hình. Nếu firmware lớn hơn phân vùng app thì không được flash.
-
-## 4. Agent trên PC — terminal 1
-
-```bash
-docker run --rm -it --net=host \
-  microros/micro-ros-agent:humble udp4 --port 8888 -v6
-```
-
-Sau khi Agent đang chạy, khởi động ESP32. Bảo đảm PC và ESP32 cùng mạng LAN có thể truyền UDP; kiểm tra firewall nếu không kết nối.
-
-## 5. Node ROS 2 — terminal 2
-
-Giữ nguyên Python node từ nhánh trước:
-
-```bash
+cd /media/hoang_anh/5A1479B014798FAD/MicroROS
 source /opt/ros/humble/setup.bash
-cd ~/MicroROS-Arduino
-python3 host/imu_cmd_vel_bridge.py
+source agent_ws/install/local_setup.bash
+ros2 run micro_ros_agent micro_ros_agent udp4 --port 8888 -v6
 ```
 
-Mặc định gửi Twist 0 ở 10 Hz. Có thể thử số khác 0:
+*(Nếu dùng Docker trên máy khác: `docker run --rm -it --net=host microros/micro-ros-agent:humble udp4 --port 8888 -v6`.)*
+
+### Terminal 2 — Launch Gazebo headless (TurtleBot3 Burger, Empty World)
+
+Launch chỉ chạy `gzserver` (tắt GUI, LiDAR và IMU mô phỏng), giữ `/clock`, `/cmd_vel` và `/odom`:
 
 ```bash
-python3 host/imu_cmd_vel_bridge.py --ros-args \
-  -p linear_x:=0.20 -p angular_z:=0.10
-```
-
-Nếu IMU mất quá 0.5 giây, node vẫn phát cmd_vel 10 Hz nhưng đặt vận tốc về 0.
-
-## 6. Kiểm tra thực tế — terminal 3
-
-```bash
+cd /media/hoang_anh/5A1479B014798FAD/MicroROS
 source /opt/ros/humble/setup.bash
-ros2 node list
-ros2 topic list -t
-ros2 topic hz /imu/data --qos-reliability best_effort
-ros2 topic hz /cmd_vel
-ros2 topic echo /imu/data --qos-reliability best_effort
+ros2 launch sim/tb3_headless.launch.py
 ```
 
-QoS IMU trên ESP32 là BEST_EFFORT; cmd_vel là RELIABLE. Serial Monitor in số IMU publish/cmd_vel receive mỗi giây; dự kiến ~20/~10 trên đường truyền ổn định. Nếu Agent mất nhiều lần, ESP32 khởi động lại và kết nối lại.
+### Terminal 3 — Mở App so sánh quỹ đạo & sai số
 
-**Trạng thái:** đã triển khai firmware và cấu hình trên GitHub, **chưa xác nhận build/nạp hoặc tần số thực tế trên phần cứng**. IMU chỉ dùng cho test, không dùng để điều khiển hoặc định vị robot thực.
+```bash
+cd /media/hoang_anh/5A1479B014798FAD/MicroROS
+source /opt/ros/humble/setup.bash
+python3 host/odom_compare_app.py
+```
+
+App ghép `/esp32/odom` với nội suy tuyến tính từ `/odom` theo `header.stamp`, vẽ 2 quỹ đạo XY cùng tỷ lệ trục, sai số vị trí (m), sai số yaw chuẩn hóa về `[-180°, 180°]` theo thời gian, sai số cuối lượt và RMSE vị trí.
+
+### Terminal 4 — Khởi động từng bài đo kịch bản
+
+Đảm bảo ESP32 đã bật và kết nối tới Agent trước khi chạy kịch bản:
+
+- **Bài 1 — Đi thẳng** (`linear.x=0.15 m/s`, `angular.z=0.0`, `8.0 s`):
+  ```bash
+  source /opt/ros/humble/setup.bash
+  python3 host/odom_experiment.py --scenario straight
+  ```
+- **Bài 2 — Quay tại chỗ** (`linear.x=0.0`, `angular.z=0.5 rad/s`, `7.0 s`):
+  ```bash
+  source /opt/ros/humble/setup.bash
+  python3 host/odom_experiment.py --scenario turn
+  ```
+- **Bài 3 — Chạy cung** (`linear.x=0.15 m/s`, `angular.z=0.3 rad/s`, `10.0 s`):
+  ```bash
+  source /opt/ros/humble/setup.bash
+  python3 host/odom_experiment.py --scenario arc
+  ```
+
+Có thể tùy chỉnh thêm qua `--linear-x`, `--angular-z`, `--duration` (giây sim time).
+
+## 4. Tự kiểm tra nhanh không cần phần cứng
+
+- Build firmware: `~/.platformio/penv/bin/pio run`
+- Self-test nội suy & xử lý góc qua biên ±180° của app:
+  ```bash
+  python3 host/odom_compare_app.py --self-test
+  ```
+- Kiểm tra CLI node kịch bản:
+  ```bash
+  python3 host/odom_experiment.py --help
+  ```

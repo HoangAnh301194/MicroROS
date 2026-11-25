@@ -1,0 +1,4 @@
+gazebo:
+  ros__parameters:
+    # Throttle /clock to 25 Hz (40 ms) so micro-ROS over Wi-Fi UDP is not flooded by 1000 Hz physics steps.
+    publish_rate: 25.0
